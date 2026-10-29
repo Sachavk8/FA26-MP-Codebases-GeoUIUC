@@ -5,7 +5,7 @@ import styles from "./page.module.css";
 import LoginButton from "../../components/LoginButton.js";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../../components/firebase-config";
 
 // Move videos array outside component so it doesn't recreate on every render
@@ -42,6 +42,7 @@ export default function Login() {
           highScore: 0,
           totalPoints: 0,
           dailyStreak: 0,
+          lastDailyDate: null,
 
           // New fields as requested:
           bio: "", // Initialize bio as an empty string
@@ -55,7 +56,21 @@ export default function Login() {
         };
 
         try {
-          await setDoc(userRef, templateUserData, { merge: true });
+          // Only fill in fields the player doesn't have yet, so signing in again
+          // doesn't reset their scores or daily streak. Profile info is always refreshed.
+          const existingSnap = await getDoc(userRef);
+          const userData = existingSnap.exists()
+            ? Object.fromEntries(
+                Object.entries(templateUserData).filter(
+                  ([key]) => existingSnap.get(key) === undefined
+                )
+              )
+            : { ...templateUserData };
+          userData.email = user.email;
+          userData.displayName = user.displayName;
+          userData.profilePicture = user.photoURL;
+
+          await setDoc(userRef, userData, { merge: true });
           console.log(
             "User document created/updated (template applied) successfully for UID:",
             user.uid

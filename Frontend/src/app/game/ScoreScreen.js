@@ -38,11 +38,27 @@ export default function ScoreScreen({
     isLoaded,
     onNextRound,
     onScoreBarComplete,
-    currentRound
+    currentRound,
+    isDaily,
+    totalScore,
+    shareText,
+    dailyStreak
 }) {
     const router = useRouter()
     const isGameComplete = currentRound > MAX_ROUNDS
     const scorebarRef = useScoreBarAnimation(show, score, onScoreBarComplete)
+    const [shareStatus, setShareStatus] = useState("idle")
+
+    const handleShare = useCallback(async () => {
+        if (!shareText) return
+        try {
+            await copyToClipboard(shareText)
+            setShareStatus("copied")
+        } catch (error) {
+            console.error("Error copying daily result", error)
+            setShareStatus("failed")
+        }
+    }, [shareText])
 
     const handleButtonClick = useCallback(() => {
         if (isGameComplete) {
@@ -140,6 +156,15 @@ export default function ScoreScreen({
                     ref={scorebarRef}
                 />
                 <div id={styles["guessInfo"]}>{guessInfo}</div>
+                {isDaily && isGameComplete && (
+                    <div id={styles["dailySummary"]}>
+                        <div>Daily Challenge total: {totalScore} / {MAX_SCORE * MAX_ROUNDS}</div>
+                        {dailyStreak ? <div>🔥 {dailyStreak} day streak</div> : null}
+                        <button onClick={handleShare} disabled={!shareText}>
+                            {shareStatus === "copied" ? "Copied!" : shareStatus === "failed" ? "Couldn't copy - try again" : "Share result"}
+                        </button>
+                    </div>
+                )}
                 <button onClick={handleButtonClick}>
                     {isGameComplete ? "Game over - return to lobby" : "Start next!"}
                 </button>
@@ -239,6 +264,21 @@ function useScoreBarAnimation(show, score, onComplete) {
     }, [show, effectiveScore, onComplete])
 
     return canvasRef
+}
+
+async function copyToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        return
+    }
+    // Fallback for browsers without the async clipboard API
+    const textarea = document.createElement("textarea")
+    textarea.value = text
+    document.body.appendChild(textarea)
+    textarea.select()
+    const ok = document.execCommand("copy")
+    textarea.remove()
+    if (!ok) throw new Error("Copy command failed")
 }
 
 function isDefaultPosition(position) {

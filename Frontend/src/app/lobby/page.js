@@ -7,6 +7,7 @@ import { auth, db } from "@/components/firebase-config";
 import { onAuthStateChanged } from "firebase/auth";
 import { useState, useRef, useEffect } from "react";
 import { doc, getDoc } from 'firebase/firestore'
+import { getDisplayedStreak, hasPlayedToday } from "../dailyChallenge.js";
 
 function StartButton() {
   const router = useRouter();
@@ -17,6 +18,22 @@ function StartButton() {
       onClick={() => router.push("/game")}
     >
       <div className={styles.buttonText}>Start Game!</div>
+    </button>
+  );
+}
+
+function DailyChallengeButton({ playedToday }) {
+  const router = useRouter();
+
+  return (
+    <button
+      className={`${styles.startButton} ${styles.dailyButton}`}
+      onClick={() => router.push("/game?mode=daily")}
+      disabled={playedToday}
+    >
+      <div className={styles.buttonText}>
+        {playedToday ? "Daily done - back tomorrow!" : "Daily Challenge"}
+      </div>
     </button>
   );
 }
@@ -49,9 +66,16 @@ export default function Lobby() {
 
   useEffect(() => {
     // Auth guard: if not signed in, redirect back to /login.
-    const unsub = onAuthStateChanged(auth, (user) => {
+    // Also loads the player's stats once Firebase knows who is signed in.
+    const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
         try { router.replace("/login"); } catch {}
+        return;
+      }
+      try {
+        setDocSnap(await getDoc(doc(db, "users", user.uid)));
+      } catch (error) {
+        console.error("Error loading player stats", error);
       }
     });
     return () => unsub();
@@ -104,17 +128,9 @@ export default function Lobby() {
     };
   }, [index, active]); // Only index and active - NOT videos
 
-  useEffect(() => {
-      const user = auth.currentUser 
-    if (user) {
-      const docRef = doc(db, "users", user.uid)
-      const updateSnap = async () => {
-      const docSnap = await getDoc(docRef);
-        setDocSnap(docSnap)
-      }
-      updateSnap()
-    }
-  }, []);
+  const userData = docSnap?.data();
+  const dailyStreak = getDisplayedStreak(userData);
+  const playedToday = hasPlayedToday(userData);
 
 
   return (
@@ -154,6 +170,9 @@ export default function Lobby() {
               alt="trophy"
             />
             <span>{docSnap ? docSnap.get("highScore") : 0}</span>
+            <span className={styles.streak} title="Play the Daily Challenge every day to keep your streak">
+              🔥 {dailyStreak}
+            </span>
           </div>
 
           <img
@@ -167,6 +186,9 @@ export default function Lobby() {
         <div className={styles.logoContainer}>
         <StartButton />
       </div>
+        <div className={`${styles.logoContainer} ${styles.dailyContainer}`}>
+          <DailyChallengeButton playedToday={playedToday} />
+        </div>
       </div>
 
       

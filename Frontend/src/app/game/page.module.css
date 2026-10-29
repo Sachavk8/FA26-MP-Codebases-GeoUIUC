@@ -213,6 +213,16 @@ body {
     font-size: 30px;
 }
 
+#dailySummary {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+    font-size: 26px;
+    font-weight: bold;
+    color: white;
+}
+
 #scoringMap {
     width: 80vw;
     height: 50vh;

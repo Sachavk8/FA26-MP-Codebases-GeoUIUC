@@ -1,6 +1,7 @@
 "use client"
-import { useRef, useState, useEffect, useCallback } from 'react'
+import { useRef, useState, useEffect, useCallback, Suspense } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useJsApiLoader } from "@react-google-maps/api"
 import { getRandomPoint } from "./test-scripts/randpoint.js"
 import styles from "./page.module.css"
@@ -9,6 +10,7 @@ import ScoreScreen from './ScoreScreen.js'
 import GuessMap from './GuessMap.js'
 import { auth, db} from '@/components/firebase-config.js'
 import { doc, updateDoc, increment, getDoc } from 'firebase/firestore'
+import { getDailyKey, createDailyPointGenerator, recordDailyResult, buildShareText } from '../dailyChallenge.js'
 
 const CAMPUS_MAP_BOUNDS = {
     north: 40.1161,
@@ -75,7 +77,12 @@ function formatDistanceText(distance, hasGuess) {
         : `You didn't place a guess - 0pts!`
 }
 
-function useStreetViewPanorama(isLoaded, panoramaRef) {
+// Normal games use Math.random; the Daily Challenge uses a seeded generator per round
+function randomPointGenerator() {
+    return () => getRandomPoint()
+}
+
+function useStreetViewPanorama(isLoaded, panoramaRef, getPointGenerator) {
     const [goalPoint, setGoalPoint] = useState(null)
     const panoramaInstanceRef = useRef(null)
 
@@ -95,7 +102,7 @@ function useStreetViewPanorama(isLoaded, panoramaRef) {
         }
     }, [panoramaRef])
 
-    const findValidPanorama = useCallback((initialPoint) => {
+    const findValidPanorama = useCallback((initialPoint, nextPoint = getRandomPoint) => {
         if (!window.google?.maps) return
 
         ensurePanoramaInitialized()
@@ -105,7 +112,7 @@ function useStreetViewPanorama(isLoaded, panoramaRef) {
             const isGoogleStreetView = data.copyright?.indexOf("Google") >= 0
 
             if (!isGoogleStreetView) {
-                const randomPoint = getRandomPoint()
+                const randomPoint = nextPoint()
                 const newPoint = createPosition(randomPoint.lat, randomPoint.long)
                 setGoalPoint(newPoint)
                 service.getPanorama({ location: newPoint, radius: 1000 }).then(processPanorama)
@@ -154,11 +161,12 @@ function useStreetViewPanorama(isLoaded, panoramaRef) {
         if (!isLoaded || !window.google) return
 
         ensurePanoramaInitialized()
-        const randomPoint = getRandomPoint()
+        const nextPoint = getPointGenerator(1)
+        const randomPoint = nextPoint()
         const point = createPosition(randomPoint.lat, randomPoint.long)
         setGoalPoint(point)
-        findValidPanorama(point)
-    }, [isLoaded, ensurePanoramaInitialized, findValidPanorama])
+        findValidPanorama(point, nextPoint)
+    }, [isLoaded, ensurePanoramaInitialized, findValidPanorama, getPointGenerator])
 
     return { goalPoint, findValidPanorama, zoomIn, zoomOut }
 }
@@ -239,6 +247,7 @@ function useGameLogic(goalPoint) {
         setGuessInfo(formatDistanceText(distance, hasGuess))
         setSubmittedGoal(goalPoint)
         setSubmittedGuess(guessPosition || DEFAULT_POSITION)
+        return calculatedScore
     }, [goalPoint, userGuess])
 
     const resetGuess = useCallback(() => {
@@ -262,14 +271,14 @@ function useGameLogic(goalPoint) {
     }
 }
 
-function UIOverlay({ timerText, currentRound }) {
+function UIOverlay({ timerText, currentRound, isDaily }) {
     return (
         <div id={styles["overlay"]}>
             <Link href="/lobby">
                 <img src="./logo.png" style={{ maxHeight: "60px" }} alt="Logo" />
             </Link>
             <div id={styles["timer"]}>{timerText}</div>
-            <div id={styles["roundCounter"]}>Round {currentRound}</div>
+            <div id={styles["roundCounter"]}>{isDaily ? "Daily · " : ""}Round {Math.min(currentRound, MAX_ROUNDS)}</div>
         </div>
     )
 }
@@ -286,11 +295,30 @@ function ControlOverlay({ onZoomIn, onZoomOut }) {
 
 
 
-export default function Gameplay() {
+// useSearchParams needs a Suspense boundary for the production build
+export default function GamePage() {
+    return (
+        <Suspense fallback={null}>
+            <Gameplay />
+        </Suspense>
+    )
+}
+
+function Gameplay() {
+    const isDaily = useSearchParams().get("mode") === "daily"
+    // Fixed when the game starts, so a game played across midnight keeps the same locations
+    const [dailyKey] = useState(() => getDailyKey())
     const [showScoreScreen, setShowScoreScreen] = useState(false)
     const [currentRound, setCurrentRound] = useState(1)
     const [isMapExpanded, setIsMapExpanded] = useState(false)
+    const [roundScores, setRoundScores] = useState([])
+    const [dailyStreak, setDailyStreak] = useState(null)
     const panoramaRef = useRef(null)
+
+    const getPointGenerator = useCallback(
+        (round) => isDaily ? createDailyPointGenerator(dailyKey, round) : randomPointGenerator(),
+        [isDaily, dailyKey]
+    )
 
 
     const { isLoaded } = useJsApiLoader({
@@ -301,7 +329,7 @@ export default function Gameplay() {
 
     const { playEffect, startScoreAdd, stopScoreAdd } = useAudio()
 
-    const { goalPoint, findValidPanorama, zoomIn, zoomOut } = useStreetViewPanorama(isLoaded, panoramaRef)
+    const { goalPoint, findValidPanorama, zoomIn, zoomOut } = useStreetViewPanorama(isLoaded, panoramaRef, getPointGenerator)
     const gameLogic = useGameLogic(goalPoint)
     const { seconds: timerSeconds, reset: resetTimer, formatted: timerText } = useTimer(
         INITIAL_TIMER_SECONDS,
@@ -311,13 +339,26 @@ export default function Gameplay() {
     // No audio stop helper needed; no score-fill audio
 
     const handleSubmitGuess = useCallback(() => {
-        gameLogic.submitGuess()
+        // The timer keeps running on the score screen; don't submit the same round twice
+        if (showScoreScreen || currentRound > MAX_ROUNDS) return
+
+        const roundScore = gameLogic.submitGuess()
+        if (roundScore === undefined) return
+
+        const newRoundScores = [...roundScores, roundScore]
+        setRoundScores(newRoundScores)
+        if (isDaily && newRoundScores.length === MAX_ROUNDS && auth.currentUser) {
+            recordDailyResult(db, auth.currentUser.uid, dailyKey, newRoundScores)
+                .then(setDailyStreak)
+                .catch(error => console.error("Error saving daily challenge", error))
+        }
+
         setCurrentRound(prev => prev + 1)
         setShowScoreScreen(true)
         // Restart and slightly delay score-fill sound to avoid race with UI updates
         try { stopScoreAdd() } catch { }
         setTimeout(() => { try { startScoreAdd() } catch { } }, 60)
-    }, [gameLogic, startScoreAdd, stopScoreAdd])
+    }, [gameLogic, startScoreAdd, stopScoreAdd, showScoreScreen, currentRound, roundScores, isDaily, dailyKey])
 
     const handleMapClick = useCallback((position) => {
         playEffect()
@@ -333,14 +374,19 @@ export default function Gameplay() {
         if (currentRound > MAX_ROUNDS) return
 
         playEffect()
-        const randomPoint = getRandomPoint()
+        const nextPoint = getPointGenerator(currentRound)
+        const randomPoint = nextPoint()
         const newGoalPoint = createPosition(randomPoint.lat, randomPoint.long)
 
         gameLogic.resetGuess()
         setShowScoreScreen(false)
         resetTimer(INITIAL_TIMER_SECONDS)
-        findValidPanorama(newGoalPoint)
-    }, [currentRound, gameLogic, resetTimer, findValidPanorama, playEffect])
+        findValidPanorama(newGoalPoint, nextPoint)
+    }, [currentRound, gameLogic, resetTimer, findValidPanorama, playEffect, getPointGenerator])
+
+    const shareText = isDaily && roundScores.length === MAX_ROUNDS
+        ? buildShareText(dailyKey, roundScores, dailyStreak)
+        : null
 
 
     return (
@@ -350,7 +396,7 @@ export default function Gameplay() {
                 ref={panoramaRef}
                 style={{ width: "100vw", height: "100vh" }}
             />
-            <UIOverlay timerText={timerText} currentRound={currentRound} />
+            <UIOverlay timerText={timerText} currentRound={currentRound} isDaily={isDaily} />
             <ControlOverlay onZoomIn={zoomIn} onZoomOut={zoomOut} />
             {!showScoreScreen && (
                 <GuessMap
@@ -373,6 +419,10 @@ export default function Gameplay() {
                 onNextRound={startRound}
                 onScoreBarComplete={handleScoreBarComplete}
                 currentRound={currentRound}
+                isDaily={isDaily}
+                totalScore={roundScores.reduce((sum, score) => sum + score, 0)}
+                shareText={shareText}
+                dailyStreak={dailyStreak}
             />
         </div>
     )

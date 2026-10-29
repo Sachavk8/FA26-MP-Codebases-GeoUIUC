@@ -254,3 +254,20 @@
   }
   
 }
+.dailyContainer {
+  margin-top: clamp(12px, 2vh, 24px);
+}
+
+.dailyButton {
+  width: auto;
+  min-width: 18vw;
+}
+
+.dailyButton:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.streak {
+  margin-left: 2vw;
+}

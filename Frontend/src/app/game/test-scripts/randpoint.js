@@ -26,13 +26,14 @@ for (let i = 0; i < perimeter.length - 2; i += 2) {
 
 let boundingData = { topLongitude: -88.24238428986186, topLatitude: 40.11611769953682, bottomLongitude: -88.20952176360476, bottomLatitude: 40.08842958076448 }
 
-export function getRandomPoint() {
+// rng defaults to Math.random; the Daily Challenge passes a seeded generator so everyone gets the same points
+export function getRandomPoint(rng = Math.random) {
     let randomPoint
     let WARN = 0
     while (WARN < 1000) {
         randomPoint = {
-            lat: (Math.random() * (boundingData.bottomLatitude - boundingData.topLatitude)) + boundingData.topLatitude,
-            long: (Math.random() * (boundingData.topLongitude - boundingData.bottomLongitude)) + boundingData.bottomLongitude
+            lat: (rng() * (boundingData.bottomLatitude - boundingData.topLatitude)) + boundingData.topLatitude,
+            long: (rng() * (boundingData.topLongitude - boundingData.bottomLongitude)) + boundingData.bottomLongitude
         }
         //test point to see if it is within the polygon as described by lineSegments.
         //Draw a straight line from randomPoint to topLongitude, point's latitude.
