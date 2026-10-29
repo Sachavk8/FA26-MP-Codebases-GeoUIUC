@@ -87,11 +87,14 @@ export default function ScoreScreen({
 
     const mapCenter = getMapCenter(goalPoint, guessPoint)
     const mapZoom = getMapZoom(distance)
-    if (userIcon == -1) {
-        userIcon = {
+    let guessIcon = userIcon
+    if (guessIcon == -1) {
+        guessIcon = {
             url: calculateDataURL(),
             scaledSize: new google.maps.Size(50, 50)
         }
+        // Only keep the icon once it has the photo, so a later round can retry
+        if (isProfilePicReady()) userIcon = guessIcon
     }
     const flagIcon = {
         url: "flag.png",
@@ -131,7 +134,7 @@ export default function ScoreScreen({
                             <MarkerF
                                 position={guessPoint}
                                 title="Your Guess"
-                                icon={userIcon}
+                                icon={guessIcon}
                             />
                             <PolylineF
                                 path={[goalPoint, guessPoint]}
@@ -307,7 +310,13 @@ function getMapZoom(distance) {
     if (distance > 5) return 12
     if (distance > 1) return 14
     return 16
-} function calculateDataURL() {
+}
+
+function isProfilePicReady() {
+    return Boolean(im && im.complete && im.naturalWidth > 0)
+}
+
+function calculateDataURL() {
     let canvas = document.body.appendChild(document.createElement("canvas"))
     let scrn = canvas.getContext("2d")
     console.log(im)
@@ -330,7 +339,14 @@ function getMapZoom(distance) {
     scrn.ellipse(50, 50, 25, 25, Math.PI, 0, Math.PI * 2)
     scrn.closePath()
     scrn.clip("nonzero")
-    scrn.drawImage(im, 25, 25, 50, 50)
+    // The profile picture can fail to load (no saved URL, or Google refused the request);
+    // drawing a broken image throws, so fall back to a plain marker
+    if (isProfilePicReady()) {
+        scrn.drawImage(im, 25, 25, 50, 50)
+    } else {
+        scrn.fillStyle = "#ffffff"
+        scrn.fill()
+    }
     scrn.closePath()
 
     // console.log(canvas)
